@@ -30,13 +30,25 @@ func ripgrep(q query.Q) ([]string, error) {
 		}
 	}
 
+	var args []string
 	var reParts []string
 	for _, q := range and.Children {
 		switch s := q.(type) {
 		case *query.Substring:
-			observeCaseSensitive(s.CaseSensitive)
-			reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
+			if s.FileName {
+				if s.CaseSensitive {
+					args = append(args, "-g", "*"+s.Pattern+"*")
+				} else {
+					args = append(args, "--iglob", "*"+s.Pattern+"*")
+				}
+			} else {
+				observeCaseSensitive(s.CaseSensitive)
+				reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
+			}
 		case *query.Regexp:
+			if s.FileName {
+				return nil, fmt.Errorf("Unexpected file regexp filter")
+			}
 			observeCaseSensitive(s.CaseSensitive)
 			reParts = append(reParts, s.Regexp.String())
 		default:
@@ -52,12 +64,11 @@ func ripgrep(q query.Q) ([]string, error) {
 	// OpAnyCharNotNL is written as (?-s:.) which is unneccessary
 	reStr := strings.Replace(re.String(), "(?-s:.)", ".", -1)
 
-	var args []string
 	if isCaseSensitive == 3 {
 		return nil, fmt.Errorf("Query mixes case sensitivity")
 	}
 	if isCaseSensitive != 1 {
-		args = []string{"-i"}
+		args = append([]string{"-i"}, args...)
 	}
 
 	args = append(args, "-e", reStr)
