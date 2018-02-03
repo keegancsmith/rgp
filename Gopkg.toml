@@ -1,0 +1,8 @@
+[[constraint]]
+  branch = "master"
+  name = "github.com/google/zoekt"
+
+[prune]
+  non-go = true
+  go-tests = true
+  unused-packages = true
