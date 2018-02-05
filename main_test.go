@@ -21,10 +21,8 @@ func TestRipGrep(t *testing.T) {
 		{"f:bar", []string{"-i", "--iglob", "*bar*", "--files"}},
 		{"f:bar f:baz", []string{"-i", "--iglob", "*bar*", "--iglob", "*baz*", "--files"}},
 		{"f:bar -f:baz", []string{"-i", "--iglob", "*bar*", "--iglob", "!*baz*", "--files"}},
-
-		// Next two fail due to parsing file as regex
-		//{"foo f:bar*.go case:yes", []string{"-g", "*bar*.go*", "-e", "(foo)"}},
-		//{"foo f:bar*", []string{"-i", "--iglob", "*bar**", "-e", "(foo)"}},
+		{"foo f:bar*.go case:yes", []string{"-g", "bar*.go", "-e", "(foo)"}},
+		{"foo f:bar*", []string{"-i", "--iglob", "bar*", "-e", "(foo)"}},
 	}
 	for _, tt := range cases {
 		q, err := query.Parse(tt.Query)

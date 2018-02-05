@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"regexp/syntax"
+	"strings"
 )
 
 var _ = log.Printf
@@ -173,12 +174,7 @@ func parseExpr(in []byte) (Q, int, error) {
 		}
 		expr = q
 	case tokFile:
-		q, err := regexpQuery(text, false, true)
-		if err != nil {
-			return nil, 0, err
-		}
-		expr = q
-
+		expr = globQuery(text)
 	case tokContent:
 		q, err := regexpQuery(text, true, false)
 		if err != nil {
@@ -229,6 +225,13 @@ func parseExpr(in []byte) (Q, int, error) {
 	}
 
 	return expr, len(in) - len(b), nil
+}
+
+func globQuery(text string) Q {
+	if text == "" || strings.Contains(text, "*") {
+		return &Glob{Pattern: text}
+	}
+	return &Glob{Pattern: "*" + text + "*"}
 }
 
 // regexpQuery parses an atom into either a regular expression, or a

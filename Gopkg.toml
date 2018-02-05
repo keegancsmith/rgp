@@ -1,6 +1,7 @@
 [[constraint]]
-  branch = "master"
+  branch = "query-glob"
   name = "github.com/google/zoekt"
+  source = "github.com/keegancsmith/zoekt"
 
 [prune]
   non-go = true

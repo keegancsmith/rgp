@@ -37,6 +37,12 @@ type Regexp struct {
 	CaseSensitive bool
 }
 
+// Glob is a query looking for glob matches on files.
+type Glob struct {
+	Pattern       string
+	CaseSensitive bool
+}
+
 // Symbol finds a string that is a symbol.
 type Symbol struct {
 	Atom *Substring
@@ -55,6 +61,14 @@ func (q *Regexp) String() string {
 		pref = "case_" + pref
 	}
 	return fmt.Sprintf("%sregex:%q", pref, q.Regexp.String())
+}
+
+func (q *Glob) String() string {
+	pref := ""
+	if q.CaseSensitive {
+		pref = "case_" + pref
+	}
+	return fmt.Sprintf("%sglob:%q", pref, q.Pattern)
 }
 
 type caseQ struct {
@@ -149,6 +163,18 @@ func (q *Regexp) setCase(k string) {
 		q.CaseSensitive = false
 	case "auto":
 		q.CaseSensitive = (q.Regexp.String() != LowerRegexp(q.Regexp).String())
+	}
+}
+
+func (q *Glob) setCase(k string) {
+	switch k {
+	case "yes":
+		q.CaseSensitive = true
+	case "no":
+		q.CaseSensitive = false
+	case "auto":
+		// TODO - unicode
+		q.CaseSensitive = (q.Pattern != string(toLower([]byte(q.Pattern))))
 	}
 }
 
@@ -314,6 +340,10 @@ func evalConstants(q Q) Q {
 		}
 		return &Not{ch}
 	case *Substring:
+		if len(s.Pattern) == 0 {
+			return &Const{true}
+		}
+	case *Glob:
 		if len(s.Pattern) == 0 {
 			return &Const{true}
 		}

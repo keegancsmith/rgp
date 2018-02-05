@@ -2,14 +2,15 @@
 
 
 [[projects]]
-  branch = "master"
+  branch = "query-glob"
   name = "github.com/google/zoekt"
   packages = ["query"]
-  revision = "b6ffdaa0b898a9a223665830355d79d1d2d608ec"
+  revision = "9d988ca10fc0a7ccc1663abc57c2b5804db22c80"
+  source = "github.com/keegancsmith/zoekt"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "20d49ece2cc53785a2858de60b1f661c6135c08a7b5f5f0ff9572d73f8aee488"
+  inputs-digest = "7f42cae811e7c0a73d6274c3ea7137630a71e02209f5fac35addcd5dfca73ea5"
   solver-name = "gps-cdcl"
   solver-version = 1

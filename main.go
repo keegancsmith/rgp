@@ -41,27 +41,27 @@ func ripgrep(q query.Q) ([]string, error) {
 		}
 
 		switch s := q.(type) {
+		case *query.Glob:
+			pattern := s.Pattern
+			if isNot {
+				pattern = "!" + pattern
+			}
+			if s.CaseSensitive {
+				args = append(args, "-g", pattern)
+			} else {
+				args = append(args, "--iglob", pattern)
+			}
 		case *query.Substring:
 			if s.FileName {
-				pattern := "*" + s.Pattern + "*"
-				if isNot {
-					pattern = "!" + pattern
-				}
-				if s.CaseSensitive {
-					args = append(args, "-g", pattern)
-				} else {
-					args = append(args, "--iglob", pattern)
-				}
-			} else {
-				if isNot {
-					return nil, fmt.Errorf("Do not support negative pattern matches")
-				}
-				observeCaseSensitive(s.CaseSensitive)
-				reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
+				return nil, fmt.Errorf("Unexpected file substr filter")
 			}
+			if isNot {
+				return nil, fmt.Errorf("Do not support negative pattern matches")
+			}
+			observeCaseSensitive(s.CaseSensitive)
+			reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
 		case *query.Regexp:
 			if s.FileName {
-				// TODO fork zoekt/query to treat file atoms as globs
 				return nil, fmt.Errorf("Unexpected file regexp filter")
 			}
 			if isNot {
