@@ -15,6 +15,8 @@ chromium codesearch does.
 
 ## Installation
 
+Ensure `ripgrep` is on your path https://github.com/BurntSushi/ripgrep#installation
+
 ```sh
 # Install with go toolchain
 go get github.com/keegancsmith/rgp
