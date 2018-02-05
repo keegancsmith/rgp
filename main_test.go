@@ -13,11 +13,14 @@ func TestRipGrep(t *testing.T) {
 		Args  []string
 	}{
 		{"foo", []string{"-i", "-e", "(foo)"}},
-		{"foo bar", []string{"-i", "-e", "(foo).*(bar)"}},
-		{"foo bar case:yes", []string{"-e", "(foo).*(bar)"}},
+		{"foo bar", []string{"-i", "-e", "(foo).*?(bar)"}},
+		{"foo bar case:yes", []string{"-e", "(foo).*?(bar)"}},
 		{"foo.*bar", []string{"-i", "-e", "(foo.*bar)"}},
 		{"foo f:bar", []string{"-i", "--iglob", "*bar*", "-e", "(foo)"}},
 		{"foo f:bar case:yes", []string{"-g", "*bar*", "-e", "(foo)"}},
+		{"f:bar", []string{"-i", "--iglob", "*bar*", "--files"}},
+		{"f:bar f:baz", []string{"-i", "--iglob", "*bar*", "--iglob", "*baz*", "--files"}},
+		{"f:bar -f:baz", []string{"-i", "--iglob", "*bar*", "--iglob", "!*baz*", "--files"}},
 
 		// Next two fail due to parsing file as regex
 		//{"foo f:bar*.go case:yes", []string{"-g", "*bar*.go*", "-e", "(foo)"}},

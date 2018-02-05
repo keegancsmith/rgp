@@ -34,21 +34,38 @@ func ripgrep(q query.Q) ([]string, error) {
 	var args []string
 	var reParts []string
 	for _, q := range and.Children {
+		isNot := false
+		if s, ok := q.(*query.Not); ok {
+			isNot = true
+			q = s.Child
+		}
+
 		switch s := q.(type) {
 		case *query.Substring:
 			if s.FileName {
+				pattern := "*" + s.Pattern + "*"
+				if isNot {
+					pattern = "!" + pattern
+				}
 				if s.CaseSensitive {
-					args = append(args, "-g", "*"+s.Pattern+"*")
+					args = append(args, "-g", pattern)
 				} else {
-					args = append(args, "--iglob", "*"+s.Pattern+"*")
+					args = append(args, "--iglob", pattern)
 				}
 			} else {
+				if isNot {
+					return nil, fmt.Errorf("Do not support negative pattern matches")
+				}
 				observeCaseSensitive(s.CaseSensitive)
 				reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
 			}
 		case *query.Regexp:
 			if s.FileName {
+				// TODO fork zoekt/query to treat file atoms as globs
 				return nil, fmt.Errorf("Unexpected file regexp filter")
+			}
+			if isNot {
+				return nil, fmt.Errorf("Do not support negative pattern matches")
 			}
 			observeCaseSensitive(s.CaseSensitive)
 			reParts = append(reParts, s.Regexp.String())
@@ -56,14 +73,6 @@ func ripgrep(q query.Q) ([]string, error) {
 			return nil, fmt.Errorf("Unexpected query type %T", q)
 		}
 	}
-	re, err := syntax.Parse(fmt.Sprintf("(%s)", strings.Join(reParts, ").*(")), syntax.PerlX|syntax.UnicodeGroups)
-	if err != nil {
-		return nil, err
-	}
-	re = re.Simplify()
-
-	// OpAnyCharNotNL is written as (?-s:.) which is unneccessary
-	reStr := strings.Replace(re.String(), "(?-s:.)", ".", -1)
 
 	if isCaseSensitive == 3 {
 		return nil, fmt.Errorf("Query mixes case sensitivity")
@@ -72,8 +81,22 @@ func ripgrep(q query.Q) ([]string, error) {
 		args = append([]string{"-i"}, args...)
 	}
 
-	args = append(args, "-e", reStr)
+	if len(reParts) == 0 {
+		// No regexes specified, so return matching files
+		args = append(args, "--files")
+		return args, nil
+	}
 
+	re, err := syntax.Parse(fmt.Sprintf("(%s)", strings.Join(reParts, ").*?(")), syntax.PerlX|syntax.UnicodeGroups)
+	if err != nil {
+		return nil, err
+	}
+	re = re.Simplify()
+
+	// OpAnyCharNotNL is written as (?-s:.) which is unneccessary
+	reStr := strings.Replace(re.String(), "(?-s:.)", ".", -1)
+
+	args = append(args, "-e", reStr)
 	return args, nil
 }
 
@@ -87,10 +110,16 @@ func hasRepoQuery(q query.Q) bool {
 	return hasRepo
 }
 
-func runrg(dir string, args []string) int {
-	if dir != "" {
-		args = append(args, "--", dir)
-	}
+func simplifyRepoQuery(q query.Q, repo string) query.Q {
+	return query.Simplify(query.Map(q, func(q query.Q) query.Q {
+		if r, ok := q.(*query.Repo); ok {
+			return &query.Const{Value: strings.Contains(repo, r.Pattern)}
+		}
+		return q
+	}))
+}
+
+func runrg(args []string) int {
 	cmd := exec.Command("rg", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -107,23 +136,46 @@ func runrg(dir string, args []string) int {
 }
 
 func main() {
-	var args []string
-	if len(args) > 1 {
-		args = os.Args[1:]
-	}
-	if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[1] == "-h")) {
-		code := runrg("", args)
-		fmt.Println()
-		fmt.Printf("USAGE: %s [ripgrep flags...] PATTERN\n", os.Args[0])
-		os.Exit(code)
-	}
+	var (
+		passthrough []string
+		q           query.Q
+	)
+	{
+		var args []string
+		if len(os.Args) > 1 {
+			args = os.Args[1:]
+		}
+		if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h")) {
+			code := runrg(args)
+			fmt.Println()
+			fmt.Printf("USAGE: %s [ripgrep flags...] PATTERN\n", os.Args[0])
+			os.Exit(code)
+		}
 
-	q, err := query.Parse(args[len(args)-1])
-	if err != nil {
-		log.Fatal(err)
+		dashDash := false
+		var rawQ string
+		for i, arg := range args {
+			if arg == "--" {
+				dashDash = true
+				passthrough = args[:i]
+				rawQ = strings.Join(args[i+1:], " ")
+				break
+			}
+		}
+		if !dashDash {
+			rawQ = strings.Join(args, " ")
+		}
+
+		// TODO maybe a mode which takes a regex emacs ivy builds and
+		// splitting it back into a pattern.
+
+		var err error
+		q, err = query.Parse(rawQ)
+		if err != nil {
+			log.Fatal(err)
+		}
+		q = query.Simplify(q)
 	}
-	q = query.Simplify(q)
-	passthrough := args[:len(args)-1]
 
 	// if we don't have a repo query, root the search from cwd
 	if !hasRepoQuery(q) {
@@ -131,7 +183,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		code := runrg("", append(passthrough, args...))
+		code := runrg(append(passthrough, args...))
 		os.Exit(code)
 	}
 
@@ -144,8 +196,12 @@ func main() {
 		srcpaths = []string{cwd}
 	}
 
-	hasMatch := false
+	var noRepoQ query.Q
+	var paths []string
 	for _, srcpath := range srcpaths {
+		// TODO use a fork of
+		// https://github.com/golang/tools/blob/master/imports/fastwalk.go
+		// specialized to finding `.git`
 		err := filepath.Walk(srcpath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
@@ -168,32 +224,12 @@ func main() {
 				return err
 			}
 
-			// Check if query matches repo
-			q2 := query.Simplify(query.Map(q, func(q query.Q) query.Q {
-				if r, ok := q.(*query.Repo); ok {
-					return &query.Const{Value: strings.Contains(repo, r.Pattern)}
-				}
-				return q
-			}))
-			if c, ok := q2.(*query.Const); ok {
-				if c.Value {
-					hasMatch = true
-					fmt.Println(path)
-				}
+			q2 := simplifyRepoQuery(q, repo)
+			if c, ok := q2.(*query.Const); ok && !c.Value {
 				return filepath.SkipDir
 			}
-
-			args, err := ripgrep(q2)
-			if err != nil {
-				return err
-			}
-			code := runrg(path, append(passthrough, args...))
-			if code == 0 {
-				hasMatch = true
-			} else if code != 1 {
-				os.Exit(code)
-			}
-
+			noRepoQ = q2
+			paths = append(paths, path)
 			return filepath.SkipDir
 		})
 		if err != nil {
@@ -201,7 +237,27 @@ func main() {
 		}
 	}
 
-	if !hasMatch {
+	// Update q to be the pattern without the repo atoms.
+	if noRepoQ == nil {
+		// we didn't match anything
 		os.Exit(1)
 	}
+	q = noRepoQ
+
+	if _, ok := q.(*query.Const); ok {
+		// If we simplify down to a constant, we are a repo query only.
+		for _, path := range paths {
+			fmt.Println(path)
+		}
+		return
+	}
+
+	args, err := ripgrep(q)
+	if err != nil {
+		log.Fatal(err)
+	}
+	args = append(passthrough, args...)
+	args = append(args, paths...)
+	code := runrg(args)
+	os.Exit(code)
 }
