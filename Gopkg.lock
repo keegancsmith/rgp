@@ -5,7 +5,7 @@
   branch = "query-glob"
   name = "github.com/google/zoekt"
   packages = ["query"]
-  revision = "9d988ca10fc0a7ccc1663abc57c2b5804db22c80"
+  revision = "72083d83deed53520b10b69bb1c05b4815387c6a"
   source = "github.com/keegancsmith/zoekt"
 
 [solve-meta]
