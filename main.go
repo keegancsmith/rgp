@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/google/zoekt/query"
+	"github.com/keegancsmith/rgp/internal/fastwalk"
 )
 
 func ripgrep(q query.Q) ([]string, error) {
@@ -199,15 +200,8 @@ func main() {
 	var noRepoQ query.Q
 	var paths []string
 	for _, srcpath := range srcpaths {
-		// TODO use a fork of
-		// https://github.com/golang/tools/blob/master/imports/fastwalk.go
-		// specialized to finding `.git`
-		err := filepath.Walk(srcpath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-
-			if !info.IsDir() {
+		err := fastwalk.Walk(srcpath, func(path string, typ os.FileMode) error {
+			if typ != os.ModeDir {
 				return nil
 			}
 
