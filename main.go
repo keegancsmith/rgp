@@ -15,6 +15,8 @@ import (
 	"github.com/keegancsmith/rgp/internal/fastwalk"
 )
 
+const debug = false
+
 func ripgrep(q query.Q) ([]string, error) {
 	// Q is fully hierarchical with many token types, but we are only
 	// supporting a very flat limited subset of that.
@@ -23,17 +25,8 @@ func ripgrep(q query.Q) ([]string, error) {
 		and = &query.And{Children: []query.Q{q}}
 	}
 
-	isCaseSensitive := 0 // 0=unknown, 1=yes, 2=no, 3=both
-	observeCaseSensitive := func(cs bool) {
-		if cs {
-			isCaseSensitive = isCaseSensitive | 1
-		} else {
-			isCaseSensitive = isCaseSensitive | 2
-		}
-	}
-
 	var args []string
-	var reParts []string
+	var reParts []*syntax.Regexp
 	for _, q := range and.Children {
 		isNot := false
 		if s, ok := q.(*query.Not); ok {
@@ -59,8 +52,14 @@ func ripgrep(q query.Q) ([]string, error) {
 			if isNot {
 				return nil, fmt.Errorf("Do not support negative pattern matches")
 			}
-			observeCaseSensitive(s.CaseSensitive)
-			reParts = append(reParts, regexp.QuoteMeta(s.Pattern))
+			re, err := syntax.Parse(regexp.QuoteMeta(s.Pattern), syntax.PerlX|syntax.UnicodeGroups)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if !s.CaseSensitive {
+				re.Flags = re.Flags | syntax.FoldCase
+			}
+			reParts = append(reParts, re)
 		case *query.Regexp:
 			if s.FileName {
 				return nil, fmt.Errorf("Unexpected file regexp filter")
@@ -68,18 +67,14 @@ func ripgrep(q query.Q) ([]string, error) {
 			if isNot {
 				return nil, fmt.Errorf("Do not support negative pattern matches")
 			}
-			observeCaseSensitive(s.CaseSensitive)
-			reParts = append(reParts, s.Regexp.String())
+			re := s.Regexp
+			if !s.CaseSensitive {
+				re.Flags = re.Flags | syntax.FoldCase
+			}
+			reParts = append(reParts, re)
 		default:
 			return nil, fmt.Errorf("Unexpected query type %T", q)
 		}
-	}
-
-	if isCaseSensitive == 3 {
-		return nil, fmt.Errorf("Query mixes case sensitivity")
-	}
-	if isCaseSensitive != 1 {
-		args = append([]string{"-i"}, args...)
 	}
 
 	if len(reParts) == 0 {
@@ -88,14 +83,38 @@ func ripgrep(q query.Q) ([]string, error) {
 		return args, nil
 	}
 
-	re, err := syntax.Parse(fmt.Sprintf("(%s)", strings.Join(reParts, ").*?(")), syntax.PerlX|syntax.UnicodeGroups)
-	if err != nil {
-		return nil, err
+	// We simplify case insensitive regexes by removing the regex flag and
+	// adding a ripgrep flag. This is done so we create readable
+	// regexes. However, it doesn't effect correctness.
+	caseInsensitive := true
+	for _, re := range reParts {
+		caseInsensitive = caseInsensitive && (re.Flags&syntax.FoldCase != 0)
 	}
-	re = re.Simplify()
+	if caseInsensitive {
+		args = append(args, "-i")
+		for _, re := range reParts {
+			re.Flags = re.Flags &^ syntax.FoldCase
+		}
+	}
+
+	// Join up the regexp
+	var joined *syntax.Regexp
+	sep, err := syntax.Parse(".*?", syntax.PerlX|syntax.UnicodeGroups)
+	if err != nil {
+		log.Fatal(err)
+	}
+	joined = &syntax.Regexp{Op: syntax.OpConcat}
+	for i, re := range reParts {
+		if i != 0 {
+			joined.Sub = append(joined.Sub, sep, re)
+		} else {
+			joined.Sub = append(joined.Sub, re)
+		}
+	}
+	joined = joined.Simplify()
 
 	// OpAnyCharNotNL is written as (?-s:.) which is unneccessary
-	reStr := strings.Replace(re.String(), "(?-s:.)", ".", -1)
+	reStr := strings.Replace(joined.String(), "(?-s:.)", ".", -1)
 
 	args = append(args, "-e", reStr)
 	return args, nil
@@ -121,6 +140,9 @@ func simplifyRepoQuery(q query.Q, repo string) query.Q {
 }
 
 func runrg(args []string) int {
+	if debug {
+		log.Println(args)
+	}
 	cmd := exec.Command("rg", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
