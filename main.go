@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	prompt "github.com/c-bata/go-prompt"
 	"github.com/google/zoekt/query"
 	"github.com/keegancsmith/rgp/internal/fastwalk"
 )
@@ -158,16 +159,62 @@ func runrg(args []string) int {
 	return 0
 }
 
+func srcpaths() []string {
+	paths := filepath.SplitList(os.Getenv("SRCPATH"))
+	if len(paths) == 0 {
+		cwd, err := os.Getwd()
+		if err != nil {
+			log.Fatal(err)
+		}
+		paths = []string{cwd}
+	}
+	return paths
+}
+
+func executor(s string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], strings.Fields(s)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Got error: %s\n", err.Error())
+	}
+	return
+}
+
+func completer(d prompt.Document) []prompt.Suggest {
+	s := []prompt.Suggest{
+		{Text: "case:", Description: "Sets case sensitivity yes|no|auto. Defaults to auto."},
+		{Text: "file:", Description: "Limit results to files matching glob."},
+		{Text: "repo:", Description: "Limit results to files matching repo substring."},
+	}
+	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
+}
+
 func main() {
+	if len(os.Args) == 1 {
+		fmt.Printf("SRCPATH=%s\n", strings.Join(srcpaths(), string(os.PathListSeparator)))
+		fmt.Println("Please use `Ctrl-D` to exit this program.")
+		defer fmt.Println("Bye!")
+		p := prompt.New(
+			executor,
+			completer,
+		)
+		p.Run()
+		return
+	}
+
 	var (
 		passthrough []string
 		q           query.Q
 	)
 	{
-		var args []string
-		if len(os.Args) > 1 {
-			args = os.Args[1:]
-		}
+		args := os.Args[1:]
 		if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h")) {
 			code := runrg(args)
 			fmt.Println()
@@ -210,18 +257,9 @@ func main() {
 		os.Exit(code)
 	}
 
-	srcpaths := filepath.SplitList(os.Getenv("SRCPATH"))
-	if len(srcpaths) == 0 {
-		cwd, err := os.Getwd()
-		if err != nil {
-			log.Fatal(err)
-		}
-		srcpaths = []string{cwd}
-	}
-
 	var noRepoQ query.Q
 	var paths []string
-	for _, srcpath := range srcpaths {
+	for _, srcpath := range srcpaths() {
 		err := fastwalk.Walk(srcpath, func(path string, typ os.FileMode) error {
 			if typ != os.ModeDir {
 				return nil
