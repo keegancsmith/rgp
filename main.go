@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"regexp/syntax"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -171,6 +172,50 @@ func srcpaths() []string {
 	return paths
 }
 
+type repoPath struct {
+	Path string
+	Repo string
+	Err  error
+}
+
+func walkSRCPath() <-chan repoPath {
+	c := make(chan repoPath, 8)
+	go func() {
+		defer close(c)
+		for _, srcpath := range srcpaths() {
+			err := fastwalk.Walk(srcpath, func(path string, typ os.FileMode) error {
+				if typ != os.ModeDir {
+					return nil
+				}
+
+				if base := filepath.Base(path); len(base) > 0 && base[0] == '.' {
+					return filepath.SkipDir
+				}
+
+				if _, err := os.Stat(filepath.Join(path, ".git")); os.IsNotExist(err) {
+					return nil
+				}
+
+				repo, err := filepath.Rel(srcpath, path)
+				if err != nil {
+					return err
+				}
+
+				c <- repoPath{
+					Repo: repo,
+					Path: path,
+				}
+				return filepath.SkipDir
+			})
+			if err != nil {
+				c <- repoPath{Err: err}
+				return
+			}
+		}
+	}()
+	return c
+}
+
 func executor(s string) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -188,12 +233,65 @@ func executor(s string) {
 }
 
 func completer(d prompt.Document) []prompt.Suggest {
-	s := []prompt.Suggest{
-		{Text: "case:", Description: "Sets case sensitivity yes|no|auto. Defaults to auto."},
-		{Text: "file:", Description: "Limit results to files matching glob."},
-		{Text: "repo:", Description: "Limit results to files matching repo substring."},
+	word := strings.TrimSpace(d.GetWordBeforeCursor())
+	idx := strings.Index(word, ":")
+	if idx < 0 {
+		s := []prompt.Suggest{
+			{Text: "case:", Description: "Sets case sensitivity yes|no|auto. Defaults to auto."},
+			{Text: "file:", Description: "Limit results to files matching glob."},
+			{Text: "repo:", Description: "Limit results to files matching repo substring."},
+		}
+		if word != "" {
+			s = append([]prompt.Suggest{{Text: word, Description: "Search for lines matching " + word}}, s...)
+		}
+		return prompt.FilterHasPrefix(s, word, true)
 	}
-	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
+	typ, query := word[:idx], word[idx+1:]
+	switch typ {
+	case "case":
+		s := []prompt.Suggest{
+			{Text: "case:yes", Description: "Searches matching case."},
+			{Text: "case:no", Description: "Searches case insensitively."},
+			{Text: "case:auto", Description: "(Default) Searches case insensitively if the pattern is all lowercase."},
+		}
+		return prompt.FilterHasPrefix(s, word, true)
+	case "r", "repo":
+		type scoredRepo struct {
+			Score int
+			Repo  string
+		}
+		var repos []scoredRepo
+		for rp := range walkSRCPath() {
+			if rp.Err != nil {
+				log.Println("srcpath walk failed:", rp.Err)
+				continue
+			}
+			idx := strings.LastIndex(rp.Repo, query)
+			if idx >= 0 {
+				// Prefer matches near the end of the string
+				score := len(rp.Repo) - idx
+				repos = append(repos, scoredRepo{Score: score, Repo: rp.Repo})
+			}
+		}
+		sort.Slice(repos, func(i, j int) bool {
+			if repos[i].Score != repos[j].Score {
+				return repos[i].Score < repos[j].Score
+			}
+			return repos[i].Repo < repos[j].Repo
+		})
+		var s []prompt.Suggest
+		if len(repos) > 1 {
+			s = append(s, prompt.Suggest{Text: word, Description: fmt.Sprintf("Limit results %d repos", len(repos))})
+		}
+		for _, r := range repos {
+			s = append(s, prompt.Suggest{Text: typ + ":" + r.Repo})
+		}
+		return s
+	case "f", "file":
+		return []prompt.Suggest{{Text: word, Description: "Limit results to files matching glob " + query}}
+
+	}
+	return nil
 }
 
 func main() {
@@ -259,36 +357,16 @@ func main() {
 
 	var noRepoQ query.Q
 	var paths []string
-	for _, srcpath := range srcpaths() {
-		err := fastwalk.Walk(srcpath, func(path string, typ os.FileMode) error {
-			if typ != os.ModeDir {
-				return nil
-			}
-
-			if base := filepath.Base(path); len(base) > 0 && base[0] == '.' {
-				return filepath.SkipDir
-			}
-
-			if _, err := os.Stat(filepath.Join(path, ".git")); os.IsNotExist(err) {
-				return nil
-			}
-
-			repo, err := filepath.Rel(srcpath, path)
-			if err != nil {
-				return err
-			}
-
-			q2 := simplifyRepoQuery(q, repo)
-			if c, ok := q2.(*query.Const); ok && !c.Value {
-				return filepath.SkipDir
-			}
-			noRepoQ = q2
-			paths = append(paths, path)
-			return filepath.SkipDir
-		})
-		if err != nil {
-			log.Fatal(err)
+	for rp := range walkSRCPath() {
+		if rp.Err != nil {
+			log.Fatal(rp.Err)
 		}
+		q2 := simplifyRepoQuery(q, rp.Repo)
+		if c, ok := q2.(*query.Const); ok && !c.Value {
+			continue
+		}
+		noRepoQ = q2
+		paths = append(paths, rp.Path)
 	}
 
 	// Update q to be the pattern without the repo atoms.
